@@ -10,49 +10,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Write container build script
-        run: |
-          cat > docker_build.sh <<'SCRIPT'
-          set -x
-          TC=/lib/OpenOrbisSDK
-          SDK=/workspace/sdk/GoldHEN_Plugins_SDK
-
-          # --- 1. This image has no llvm-ar: provide one on top of GNU ar
-          if ! command -v llvm-ar >/dev/null 2>&1; then
-            printf '#!/bin/sh\nif [ "$1" = "--format=bsd" ]; then shift; fi\nexec ar "$@"\n' > /usr/local/bin/llvm-ar
-            chmod +x /usr/local/bin/llvm-ar
-          fi
-
-          # --- 2. Info for debugging
-          ls "$TC/bin/linux"
-          grep -n "quat\|orientation" "$TC/include/orbis/_types/pad.h" | head -5
-
-          # --- 3. Header compatibility: older/newer toolchains name the pad fields differently
-          if ! grep -q "quat" "$TC/include/orbis/_types/pad.h"; then
-            sed -i 's/\bquat\b/orientation/g; s/\bacell\b/acceleration/g; s/->vel\./->angularVelocity./g' /workspace/src/*.c
-          fi
-
-          # --- 4. Build the GoldHEN SDK static library, then the plugin ELF
-          make -C "$SDK" OO_PS4_TOOLCHAIN="$TC" || exit 1
-          cd /workspace
-          make dirs bin/ds5_controller.elf OO_PS4_TOOLCHAIN="$TC" GOLDHEN_SDK="$SDK" || exit 1
-
-          # --- 5. Turn the ELF into a PRX (tool name depends on the toolchain version)
-          if [ -x "$TC/bin/linux/create-fself" ]; then
-            "$TC/bin/linux/create-fself" -in=bin/ds5_controller.elf -out=bin/ds5_controller.oelf --lib=bin/ds5_controller.prx --paid 0x3800000000000011
-          else
-            "$TC/bin/linux/create-lib" -h 2>&1 | head -30
-            "$TC/bin/linux/create-lib" -in=bin/ds5_controller.elf -out=bin/ds5_controller.oelf --lib=bin/ds5_controller.prx --paid 0x3800000000000011 || \
-            "$TC/bin/linux/create-lib" -in=bin/ds5_controller.elf -out=bin/ds5_controller.prx --paid 0x3800000000000011
-          fi
-          ls -la bin
-          SCRIPT
-
       - name: Build with the OpenOrbis toolchain image
         run: |
           docker run --rm --user root -w /workspace -v "$PWD":/workspace \
             openorbisofficial/toolchain:latest \
-            bash /workspace/docker_build.sh
+            bash /workspace/ci/build.sh
 
       - uses: actions/upload-artifact@v4
         if: always()
