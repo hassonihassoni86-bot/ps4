@@ -10,11 +10,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Write container build script
+        run: |
+          cat > docker_build.sh <<'SCRIPT'
+          set -e
+          # The toolchain image ships versioned LLVM tools (e.g. llvm-ar-12);
+          # make plain names available for the Makefiles.
+          for t in llvm-ar ld.lld clang; do
+            if ! command -v "$t" >/dev/null 2>&1; then
+              f=$(ls /usr/bin/$t-[0-9]* /usr/lib/llvm-*/bin/$t 2>/dev/null | head -n1 || true)
+              if [ -n "$f" ]; then ln -sf "$f" "/usr/local/bin/$t"; fi
+            fi
+            echo "tool $t -> $(command -v $t || echo MISSING)"
+          done
+          ls "$OO_PS4_TOOLCHAIN/bin/linux" || true
+          make OO_PS4_TOOLCHAIN=/lib/OpenOrbisSDK GOLDHEN_SDK=/workspace/sdk/GoldHEN_Plugins_SDK
+          SCRIPT
+
       - name: Build with the OpenOrbis toolchain image
         run: |
           docker run --rm --user root -w /workspace -v "$PWD":/workspace \
             openorbisofficial/toolchain:latest \
-            bash -c "make OO_PS4_TOOLCHAIN=/lib/OpenOrbisSDK GOLDHEN_SDK=/workspace/sdk/GoldHEN_Plugins_SDK"
+            bash /workspace/docker_build.sh
 
       - uses: actions/upload-artifact@v4
         with:
