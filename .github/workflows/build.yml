@@ -1,1 +1,25 @@
-yaml
+name: Build ds5_controller.prx
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build with the OpenOrbis toolchain image
+        run: |
+          docker run --rm --user root -w /workspace -v "$PWD":/workspace \
+            openorbisofficial/toolchain:latest \
+            bash -c "make OO_PS4_TOOLCHAIN=/lib/OpenOrbisSDK GOLDHEN_SDK=/workspace/sdk/GoldHEN_Plugins_SDK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ds5_controller
+          path: |
+            bin/ds5_controller.prx
+            ds5_controller.ini.example
+            plugins.ini.example
