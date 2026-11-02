@@ -13,18 +13,39 @@ jobs:
       - name: Write container build script
         run: |
           cat > docker_build.sh <<'SCRIPT'
-          set -e
-          # The toolchain image ships versioned LLVM tools (e.g. llvm-ar-12);
-          # make plain names available for the Makefiles.
-          for t in llvm-ar ld.lld clang; do
-            if ! command -v "$t" >/dev/null 2>&1; then
-              f=$(ls /usr/bin/$t-[0-9]* /usr/lib/llvm-*/bin/$t 2>/dev/null | head -n1 || true)
-              if [ -n "$f" ]; then ln -sf "$f" "/usr/local/bin/$t"; fi
-            fi
-            echo "tool $t -> $(command -v $t || echo MISSING)"
-          done
-          ls "$OO_PS4_TOOLCHAIN/bin/linux" || true
-          make OO_PS4_TOOLCHAIN=/lib/OpenOrbisSDK GOLDHEN_SDK=/workspace/sdk/GoldHEN_Plugins_SDK
+          set -x
+          TC=/lib/OpenOrbisSDK
+          SDK=/workspace/sdk/GoldHEN_Plugins_SDK
+
+          # --- 1. This image has no llvm-ar: provide one on top of GNU ar
+          if ! command -v llvm-ar >/dev/null 2>&1; then
+            printf '#!/bin/sh\nif [ "$1" = "--format=bsd" ]; then shift; fi\nexec ar "$@"\n' > /usr/local/bin/llvm-ar
+            chmod +x /usr/local/bin/llvm-ar
+          fi
+
+          # --- 2. Info for debugging
+          ls "$TC/bin/linux"
+          grep -n "quat\|orientation" "$TC/include/orbis/_types/pad.h" | head -5
+
+          # --- 3. Header compatibility: older/newer toolchains name the pad fields differently
+          if ! grep -q "quat" "$TC/include/orbis/_types/pad.h"; then
+            sed -i 's/\bquat\b/orientation/g; s/\bacell\b/acceleration/g; s/->vel\./->angularVelocity./g' /workspace/src/*.c
+          fi
+
+          # --- 4. Build the GoldHEN SDK static library, then the plugin ELF
+          make -C "$SDK" OO_PS4_TOOLCHAIN="$TC" || exit 1
+          cd /workspace
+          make dirs bin/ds5_controller.elf OO_PS4_TOOLCHAIN="$TC" GOLDHEN_SDK="$SDK" || exit 1
+
+          # --- 5. Turn the ELF into a PRX (tool name depends on the toolchain version)
+          if [ -x "$TC/bin/linux/create-fself" ]; then
+            "$TC/bin/linux/create-fself" -in=bin/ds5_controller.elf -out=bin/ds5_controller.oelf --lib=bin/ds5_controller.prx --paid 0x3800000000000011
+          else
+            "$TC/bin/linux/create-lib" -h 2>&1 | head -30
+            "$TC/bin/linux/create-lib" -in=bin/ds5_controller.elf -out=bin/ds5_controller.oelf --lib=bin/ds5_controller.prx --paid 0x3800000000000011 || \
+            "$TC/bin/linux/create-lib" -in=bin/ds5_controller.elf -out=bin/ds5_controller.prx --paid 0x3800000000000011
+          fi
+          ls -la bin
           SCRIPT
 
       - name: Build with the OpenOrbis toolchain image
@@ -34,9 +55,13 @@ jobs:
             bash /workspace/docker_build.sh
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: ds5_controller
+          if-no-files-found: warn
           path: |
-            bin/ds5_controller.prx
+            bin/*.prx
+            bin/*.oelf
+            bin/*.elf
             ds5_controller.ini.example
             plugins.ini.example
